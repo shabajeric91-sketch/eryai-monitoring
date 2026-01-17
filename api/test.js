@@ -515,8 +515,168 @@ export default async function handler(req, res) {
   
   // Generate report
   const report = generateReport();
-  
-  // Return response
-  const statusCode = report.success ? 200 : 500;
-  return res.status(statusCode).json(report);
+
+  // Return JSON if requested
+  if (req.headers?.accept?.includes('application/json')) {
+    const statusCode = report.success ? 200 : 500;
+    return res.status(statusCode).json(report);
+  }
+
+  // Return HTML report
+  const html = generateHtmlReport(report);
+  res.setHeader('Content-Type', 'text/html');
+  return res.status(200).send(html);
+}
+
+function generateHtmlReport(report) {
+  const statusColor = report.success ? '#16a34a' : '#dc2626';
+  const statusText = report.success ? '✅ ALL TESTS PASSED' : '❌ SOME TESTS FAILED';
+  const statusBg = report.success ? '#064e3b' : '#7f1d1d';
+
+  return `
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EryAI Test Results</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a; 
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 2rem; margin-bottom: 10px; }
+    .overall-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 32px;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 1.2rem;
+      margin: 20px 0 30px;
+      background: ${statusBg};
+      color: ${report.success ? '#6ee7b7' : '#fca5a5'};
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 30px;
+    }
+    .stat {
+      background: #1e293b;
+      padding: 20px;
+      border-radius: 12px;
+      text-align: center;
+    }
+    .stat-value { font-size: 2rem; font-weight: bold; }
+    .stat-value.passed { color: #22c55e; }
+    .stat-value.failed { color: #ef4444; }
+    .stat-value.skipped { color: #eab308; }
+    .stat-label { color: #94a3b8; margin-top: 5px; }
+    .category { margin-bottom: 24px; }
+    .category-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: #1e293b;
+      border-radius: 8px 8px 0 0;
+      font-weight: 600;
+    }
+    .category-stats { color: #94a3b8; }
+    .tests { background: #0f172a; border: 1px solid #334155; border-top: none; border-radius: 0 0 8px 8px; }
+    .test {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid #1e293b;
+    }
+    .test:last-child { border-bottom: none; }
+    .test-name { display: flex; align-items: center; gap: 10px; }
+    .test-status { font-size: 1.1rem; }
+    .test-duration { color: #64748b; font-size: 0.85rem; }
+    .test-error { 
+      color: #fca5a5; 
+      font-size: 0.85rem; 
+      margin-top: 4px;
+      padding-left: 26px;
+    }
+    .footer {
+      margin-top: 40px;
+      text-align: center;
+      color: #64748b;
+    }
+    .footer a { color: #94a3b8; margin: 0 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧪 EryAI Test Results</h1>
+    
+    <div class="overall-status">
+      ${statusText}
+    </div>
+    
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-value passed">${report.passed}</div>
+        <div class="stat-label">Passed</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value failed">${report.failed}</div>
+        <div class="stat-label">Failed</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value skipped">${report.skipped}</div>
+        <div class="stat-label">Skipped</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">${(report.duration / 1000).toFixed(1)}s</div>
+        <div class="stat-label">Duration</div>
+      </div>
+    </div>
+    
+    ${Object.entries(report.categories).map(([category, stats]) => `
+      <div class="category">
+        <div class="category-header">
+          <span>${stats.failed > 0 ? '❌' : '✅'} ${category}</span>
+          <span class="category-stats">${stats.passed}/${stats.passed + stats.failed + stats.skipped} passed</span>
+        </div>
+        <div class="tests">
+          ${report.tests.filter(t => t.category === category).map(test => `
+            <div class="test">
+              <div>
+                <div class="test-name">
+                  <span class="test-status">${test.status === 'passed' ? '✅' : test.status === 'failed' ? '❌' : '⏭️'}</span>
+                  <span>${test.name}</span>
+                </div>
+                ${test.error ? `<div class="test-error">${test.error}</div>` : ''}
+              </div>
+              <span class="test-duration">${test.duration}ms</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('')}
+    
+    <div class="footer">
+      <p>Test run: ${new Date(report.timestamp).toLocaleString('sv-SE')}</p>
+      <p style="margin-top: 10px;">
+        <a href="/api/status">System Status</a>
+        <a href="/api/health">Health Check</a>
+        <a href="/api/test">Run Again</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+  `;
 }
