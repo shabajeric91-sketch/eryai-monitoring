@@ -1,0 +1,9 @@
+{
+  "name": "eryai-monitoring",
+  "version": "1.0.0",
+  "description": "EryAI System Monitoring & Testing",
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0"
+  }
+}
