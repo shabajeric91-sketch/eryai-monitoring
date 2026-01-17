@@ -34,6 +34,35 @@ async function checkUrl(url, name) {
   }
 }
 
+async function checkApi(url, name) {
+  const start = Date.now();
+  try {
+    const response = await fetch(url, { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'health check' }),
+      signal: AbortSignal.timeout(15000)
+    });
+    // 200 or 400 (bad request) both mean API is responding
+    const isUp = response.ok || response.status === 400;
+    return {
+      name,
+      url,
+      status: isUp ? 'operational' : 'degraded',
+      statusCode: response.status,
+      responseTime: Date.now() - start
+    };
+  } catch (error) {
+    return {
+      name,
+      url,
+      status: 'down',
+      error: error.message,
+      responseTime: Date.now() - start
+    };
+  }
+}
+
 async function checkSupabase() {
   const start = Date.now();
   try {
@@ -59,7 +88,7 @@ export default async function handler(req, res) {
   const checks = await Promise.all([
     checkUrl(CONFIG.landingUrl, 'Landing Page'),
     checkUrl(CONFIG.demoUrl, 'Demo Restaurant'),
-    checkUrl(`${CONFIG.demoUrl}/api/restaurant`, 'Sofia AI API'),
+    checkApi(`${CONFIG.demoUrl}/api/restaurant`, 'Sofia AI API'),
     checkUrl(CONFIG.dashboardUrl, 'Customer Dashboard'),
     checkUrl(CONFIG.salesUrl, 'Sales Dashboard'),
     checkSupabase()
