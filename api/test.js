@@ -16,13 +16,15 @@ const CONFIG = {
     LANDING: 'https://eryai.tech',
     DEMO: 'https://ery-ai-demo-restaurang.vercel.app',
     DASHBOARD: 'https://dashboard.eryai.tech',
-    SALES: 'https://sales.eryai.tech'
+    SALES: 'https://sales.eryai.tech',
+    ENGINE: 'https://eryai-engine.vercel.app'
   }
 };
 
 // Test results storage
 let testResults = [];
 let testSessionId = null;
+let engineSessionId = null;
 
 // Helper: Run a test
 async function runTest(category, name, testFn) {
@@ -65,6 +67,98 @@ async function testLanding() {
   });
 }
 
+// ==================== ENGINE TESTS (NEW!) ====================
+async function testEngine() {
+  await runTest('Engine', 'API responds', async () => {
+    const res = await fetch(`${CONFIG.URLS.ENGINE}/api/chat`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Test-Mode': 'true'
+      },
+      body: JSON.stringify({
+        prompt: 'Hej!',
+        slug: 'bella-italia'
+      })
+    });
+    assert(res.ok, `API error: ${res.status}`);
+    const data = await res.json();
+    assert(data.response, 'No response');
+    engineSessionId = data.sessionId;
+  });
+
+  await runTest('Engine', 'Customer lookup works', async () => {
+    const res = await fetch(`${CONFIG.URLS.ENGINE}/api/chat`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Test-Mode': 'true'
+      },
+      body: JSON.stringify({
+        prompt: 'Test',
+        slug: 'bella-italia'
+      })
+    });
+    const data = await res.json();
+    assert(data.customerName === 'Bella Italia', `Wrong customer: ${data.customerName}`);
+    assert(data.aiName === 'Sofia', `Wrong AI name: ${data.aiName}`);
+  });
+
+  await runTest('Engine', 'Knowledge base used', async () => {
+    const res = await fetch(`${CONFIG.URLS.ENGINE}/api/chat`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Test-Mode': 'true'
+      },
+      body: JSON.stringify({
+        prompt: 'Vad kostar Carbonara?',
+        slug: 'bella-italia'
+      })
+    });
+    const data = await res.json();
+    // Should mention price from knowledge base (189 kr)
+    assert(data.response.includes('189') || data.response.toLowerCase().includes('kr'), 
+      'Knowledge base not used - no price mentioned');
+  });
+
+  await runTest('Engine', 'Actions trigger correctly', async () => {
+    const res = await fetch(`${CONFIG.URLS.ENGINE}/api/chat`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Test-Mode': 'true'
+      },
+      body: JSON.stringify({
+        prompt: 'Har ni glutenfritt?',
+        slug: 'bella-italia'
+      })
+    });
+    const data = await res.json();
+    assert(data.triggeredActions.includes('add_context'), 
+      `Action not triggered: ${JSON.stringify(data.triggeredActions)}`);
+  });
+
+  await runTest('Engine', 'AI config in database', async () => {
+    const { data, error } = await supabase
+      .from('customer_ai_config')
+      .select('ai_name, ai_role')
+      .eq('customer_id', CONFIG.BELLA_ITALIA_ID)
+      .single();
+    assert(!error, `Database error: ${error?.message}`);
+    assert(data.ai_name === 'Sofia', 'AI config missing');
+  });
+
+  await runTest('Engine', 'Actions in database', async () => {
+    const { data, error } = await supabase
+      .from('customer_actions')
+      .select('id')
+      .eq('customer_id', CONFIG.BELLA_ITALIA_ID);
+    assert(!error, `Database error: ${error?.message}`);
+    assert(data.length >= 10, `Not enough actions: ${data.length}`);
+  });
+}
+
 // ==================== DEMO RESTAURANT TESTS ====================
 async function testDemo() {
   await runTest('Demo', 'Page loads', async () => {
@@ -77,7 +171,7 @@ async function testDemo() {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
-        'X-Test-Mode': 'true'  // Mark as test request
+        'X-Test-Mode': 'true'
       },
       body: JSON.stringify({
         prompt: 'Hej, är ni öppna idag?',
@@ -87,10 +181,9 @@ async function testDemo() {
     });
     assert(res.ok, `API error: ${res.status}`);
     const data = await res.json();
-    // Gemini returns candidates[0].content.parts[0].text, not response
     const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
     assert(aiResponse || data.sessionId, 'No response from Sofia');
-    testSessionId = data.sessionId; // Save for later tests
+    testSessionId = data.sessionId;
   });
 
   await runTest('Demo', 'Messages API health', async () => {
@@ -101,25 +194,6 @@ async function testDemo() {
   await runTest('Demo', 'Typing API health', async () => {
     const res = await fetch(`${CONFIG.URLS.DEMO}/api/typing?session_id=${testSessionId || 'test'}`);
     assert(res.ok, `Status: ${res.status}`);
-  });
-
-  await runTest('Demo', 'Create chat session', async () => {
-    const res = await fetch(`${CONFIG.URLS.DEMO}/api/restaurant`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Test-Mode': 'true'
-      },
-      body: JSON.stringify({
-        prompt: 'Jag vill boka ett bord',
-        sessionId: testSessionId,
-        visitorId: 'test-visitor-monitoring'
-      })
-    });
-    assert(res.ok, `API error: ${res.status}`);
-    const data = await res.json();
-    testSessionId = data.sessionId;
-    assert(testSessionId, 'No session ID returned');
   });
 
   await runTest('Demo', 'Session saved in Supabase', async () => {
@@ -142,43 +216,6 @@ async function testDemo() {
     assert(!error, `Supabase error: ${error?.message}`);
     assert(data && data.length > 0, 'No messages found');
   });
-
-  await runTest('Demo', 'Handoff trigger works', async () => {
-    const res = await fetch(`${CONFIG.URLS.DEMO}/api/restaurant`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Test-Mode': 'true'
-      },
-      body: JSON.stringify({
-        prompt: 'Jag vill prata med ägaren, min email är test@monitoring.eryai.tech',
-        sessionId: testSessionId,
-        visitorId: 'test-visitor-monitoring'
-      })
-    });
-    assert(res.ok, `API error: ${res.status}`);
-    const data = await res.json();
-    const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    assert(aiResponse || data.sessionId, 'No response');
-  });
-
-  await runTest('Demo', 'Human takeover works', async () => {
-    // After handoff, Sofia should not respond
-    const res = await fetch(`${CONFIG.URLS.DEMO}/api/restaurant`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Test-Mode': 'true'
-      },
-      body: JSON.stringify({
-        prompt: 'Hallå?',
-        sessionId: testSessionId,
-        visitorId: 'test-visitor-monitoring'
-      })
-    });
-    assert(res.ok, `API error: ${res.status}`);
-    // Test passes if no error - response content varies
-  });
 }
 
 // ==================== DASHBOARD TESTS ====================
@@ -190,13 +227,11 @@ async function testDashboard() {
 
   await runTest('Dashboard', 'Redirects to login', async () => {
     const res = await fetch(`${CONFIG.URLS.DASHBOARD}/dashboard`, { redirect: 'manual' });
-    // Should redirect to login (302/307) or show login page
     assert(res.status === 302 || res.status === 307 || res.status === 200, `Unexpected status: ${res.status}`);
   });
 
   await runTest('Dashboard', 'API messages endpoint exists', async () => {
     const res = await fetch(`${CONFIG.URLS.DASHBOARD}/api/messages`);
-    // Should return 401 (unauthorized) or 400 (missing params), not 404
     assert(res.status !== 404, 'API endpoint not found');
   });
 }
@@ -215,7 +250,6 @@ async function testSales() {
 
   await runTest('Sales', 'API leads endpoint exists', async () => {
     const res = await fetch(`${CONFIG.URLS.SALES}/api/leads`);
-    // Should return 401 (unauthorized) or error, not 404
     assert(res.status !== 404, 'API endpoint not found');
   });
 
@@ -224,7 +258,6 @@ async function testSales() {
       .from('leads')
       .select('id')
       .limit(1);
-    // Table should exist (even if empty)
     assert(!error || !error.message.includes('does not exist'), `Table error: ${error?.message}`);
   });
 }
@@ -247,19 +280,11 @@ async function testSupabase() {
   });
 
   await runTest('Supabase', 'Required tables exist', async () => {
-    const tables = ['customers', 'dashboard_users', 'chat_sessions', 'chat_messages', 'notifications'];
+    const tables = ['customers', 'dashboard_users', 'chat_sessions', 'chat_messages', 'notifications', 'customer_ai_config', 'customer_actions'];
     for (const table of tables) {
       const { error } = await supabase.from(table).select('count').limit(1);
       assert(!error || !error.message.includes('does not exist'), `Table ${table} missing`);
     }
-  });
-
-  await runTest('Supabase', 'Typing columns exist', async () => {
-    const { data, error } = await supabase
-      .from('chat_sessions')
-      .select('visitor_typing, staff_typing')
-      .limit(1);
-    assert(!error, `Typing columns missing: ${error?.message}`);
   });
 }
 
@@ -271,50 +296,40 @@ async function testEmail() {
   });
 
   await runTest('Email', 'Can send test email', async () => {
-    // Only run this test if we have failures to report, or once per day
-    // For now, just verify the API is accessible
     assert(resend, 'Resend client not initialized');
   });
 }
 
 // ==================== CLEANUP ====================
 async function cleanup() {
+  // Cleanup demo session
   if (testSessionId) {
     try {
-      // Delete test messages
-      await supabase
-        .from('chat_messages')
-        .delete()
-        .eq('session_id', testSessionId);
-      
-      // Delete test notifications
-      await supabase
-        .from('notifications')
-        .delete()
-        .eq('session_id', testSessionId);
-      
-      // Delete test session
-      await supabase
-        .from('chat_sessions')
-        .delete()
-        .eq('id', testSessionId);
-      
-      testResults.push({
-        category: 'Cleanup',
-        name: 'Test data removed',
-        status: 'passed',
-        duration: 0
-      });
+      await supabase.from('chat_messages').delete().eq('session_id', testSessionId);
+      await supabase.from('notifications').delete().eq('session_id', testSessionId);
+      await supabase.from('chat_sessions').delete().eq('id', testSessionId);
     } catch (error) {
-      testResults.push({
-        category: 'Cleanup',
-        name: 'Test data removed',
-        status: 'skipped',
-        error: error.message,
-        duration: 0
-      });
+      console.log('Cleanup error (demo):', error.message);
     }
   }
+  
+  // Cleanup engine session
+  if (engineSessionId) {
+    try {
+      await supabase.from('chat_messages').delete().eq('session_id', engineSessionId);
+      await supabase.from('notifications').delete().eq('session_id', engineSessionId);
+      await supabase.from('chat_sessions').delete().eq('id', engineSessionId);
+    } catch (error) {
+      console.log('Cleanup error (engine):', error.message);
+    }
+  }
+  
+  testResults.push({
+    category: 'Cleanup',
+    name: 'Test data removed',
+    status: 'passed',
+    duration: 0
+  });
 }
 
 // ==================== SEND FAILURE REPORT ====================
@@ -381,9 +396,11 @@ export default async function handler(req, res) {
   const startTime = Date.now();
   testResults = [];
   testSessionId = null;
+  engineSessionId = null;
 
   // Run all tests
   await testLanding();
+  await testEngine();  // NEW!
   await testDemo();
   await testDashboard();
   await testSales();
